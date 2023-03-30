@@ -130,7 +130,7 @@ class Solomon_Insertion():
                         else:
                             rj = ri+1
                         j = route[rj]
-                        # c11 = diu + dui - miu*dij
+                        # c11 = diu + duj - miu*dij
                         c11 = self.dist_m[i, u] + self.dist_m[u, j] - self.miu * self.dist_m[i, j]
                         # c12 = bju - bj 
                         bj = route_start_time_list[rj]
@@ -835,7 +835,7 @@ def show_routes(positions, routes):
     plt.show()
 
 if __name__ == "__main__":
-    file_name = "Research\LinearProgramming\solomon_100\C101.txt"
+    file_name = "solomon_100\C101.txt"
     problem = read_data(file_name)
     time1 = time()
     # routes = nearest_neighbour(problem)
