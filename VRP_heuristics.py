@@ -6,24 +6,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import copy
-from read_data import read_data
+import GraphTool
 from time import time
 
 # constructive heuristics
 class Solomon_Insertion():
-    def __init__(self, problem):
-        """solomon insertion algorithm to get an initial solution for VRP
-
-        Args:
-            problem (Problem): all information needed in VRPTW
-                positions (ndarray[N, 2]): positions of all points, depot as index 0
-                demands (ndarray[N]): demands of all points, depot as 0
-                capacity (int): capacity of each car
-
-        Returns:
-            routes (List): routes consist of idx of points
+    def __init__(self, graph):
         """
-
+        solomon insertion algorithm to get an initial solution for VRP
+        """
+        self.name = "SolomonI1"
         """ set paraments """
         self.miu = 1
         self.lamda = 1 # ps: lambda is key word
@@ -31,94 +23,84 @@ class Solomon_Insertion():
         self.alpha2 = 0
 
         """ read data and preprocess """
-        self.vehicle_num = problem.vehicle_num
-        self.capacity = problem.vehicle_capacity
-        customers = problem.customers # depot index 0, including x, y, demand, ready_time, due_time, service_time
-        self.positions = customers[:, :2]
-        self.demands = customers[:, 2]
-        self.ready_times = customers[:, 3]
-        self.due_times = customers[:, 4]
-        self.service_time = customers[:, 5]
-        self.p_num = len(self.positions)
-        self.dist_m = np.zeros((self.p_num, self.p_num))
-        for i in range(self.p_num):
-            for j in range(self.p_num):
-                self.dist_m[i, j] = np.linalg.norm(self.positions[i]- self.positions[j])   
+        self.graph = graph
 
-    def get_init_node(self, point_list, strategy=0):
-        if strategy == 0: # 0: choose farthest
+    def get_init_node(self, point_list):
+        best_p = None
+        if self.init_strategy == 0: # 0: choose farthest
             max_d = 0
             for p in point_list:
-                dist = self.dist_m[0, p]
-                start_time = max(dist, self.ready_times[p])
-                if start_time > self.due_times[p]: # exclude point break time constraint
+                time_cost = self.graph.timeMatrix[0, p]
+                start_time = max(time_cost, self.graph.readyTime[p])
+                if start_time > self.graph.dueTime[p]: # exclude point break time constraint
                     continue
-                if dist > max_d:
-                    max_d = dist
+                if time_cost > max_d:
+                    max_d = time_cost
                     best_p = p # farthest point as max_pi
-        elif strategy == 1: # 1: choose nearest
+        elif self.init_strategy == 1: # 1: choose nearest
             min_d = np.inf
             for p in point_list:
-                dist = self.dist_m[0, p]
-                start_time = max(dist, self.ready_times[p])
-                if start_time > self.due_times[p]: # exclude point break time constraint
+                time_cost = self.graph.timeMatrix[0, p]
+                start_time = max(time_cost, self.graph.readyTime[p])
+                if start_time > self.graph.dueTime[p]: # exclude point break time constraint
                     continue
-                if dist < min_d:
-                    min_d = dist
+                if time_cost < min_d:
+                    min_d = time_cost
                     best_p = p # farthest point as max_pi
-        elif strategy == 2: # 2: random select
+        elif self.init_strategy == 2: # 2: random select
             best_p = point_list[np.random.randint(len(point_list))]
-        elif strategy == 3: # 3: highest due_time
+        elif self.init_strategy == 3: # 3: highest due_time
             max_t = 0
             for p in point_list:
-                due_time = self.due_times[p]
-                start_time = max(self.dist_m[0, p], self.ready_times[p])
+                due_time = self.graph.dueTime[p]
+                start_time = max(self.graph.timeMatrix[0, p], self.graph.readyTime[p])
                 if start_time > due_time: # exclude point break time constraint
                     continue
                 if due_time > max_t:
                     max_t = due_time
                     best_p = p # farthest point as max_pi
-        elif strategy == 4: # 4: highest start_time
+        elif self.init_strategy == 4: # 4: highest start_time
             max_t = 0
             for p in point_list:
-                due_time = self.due_times[p]
-                start_time = max(self.dist_m[0, p], self.ready_times[p])
+                due_time = self.graph.dueTime[p]
+                start_time = max(self.graph.timeMatrix[0, p], self.graph.readyTime[p])
                 if start_time > due_time: # exclude point break time constraint
                     continue
                 if start_time > max_t:
                     max_t = start_time
                     best_p = p # farthest point as max_pi
+        assert best_p is not None, "exists point can't arrive in time window" 
         return best_p
 
-    def run(self):
+    def main_process(self):
         """ construct a route each circulation """
-        unassigned_points = list(range(1, self.p_num)) 
+        unassigned_points = list(range(1, self.graph.nodeNum)) 
         routes = []
         while len(unassigned_points) > 0: 
             # initiate load, point_list
             load = 0
+            volumn_load = 0
             point_list = unassigned_points.copy() # the candidate point set
             route_start_time_list = [0] # contains time when service started each point
             # choose the farthest point as s
-            best_p = self.get_init_node(point_list, strategy=0)
-            best_start_time = max(self.dist_m[0, best_p], self.ready_times[best_p])
+            best_p = self.get_init_node(point_list)
+            best_start_time = max(self.graph.timeMatrix[0, best_p], self.graph.readyTime[best_p])
             route = [0, best_p] # route contains depot and customer points 
             route_start_time_list.append(best_start_time) 
             point_list.remove(best_p) 
             unassigned_points.remove(best_p)
-            load += self.demands[best_p]
+            load += self.graph.demand[best_p]
 
             """ add a point each circulation """
             while len(point_list) > 0:
                 c2_list = [] # contains the best c1 value
                 best_insert_list = [] # contains the best insert position
-                resi_load = self.capacity - load
                 # find the insert position with lowest additional distance
                 pi = 0
                 while pi < len(point_list):
                     u = point_list[pi]
                     # remove if over load
-                    if self.demands[u] > resi_load: 
+                    if load + self.graph.demand[u] >= self.graph.capacity:
                         point_list.pop(pi)
                         continue
                     
@@ -130,30 +112,30 @@ class Solomon_Insertion():
                         else:
                             rj = ri+1
                         j = route[rj]
-                        # c11 = diu + duj - miu*dij
-                        c11 = self.dist_m[i, u] + self.dist_m[u, j] - self.miu * self.dist_m[i, j]
+                        # c11 = diu + dui - miu*dij
+                        c11 = self.graph.disMatrix[i, u] + self.graph.disMatrix[u, j] - self.miu * self.graph.disMatrix[i, j]
                         # c12 = bju - bj 
                         bj = route_start_time_list[rj]
-                        bu = max(route_start_time_list[ri] + self.service_time[i] + self.dist_m[i, u], self.ready_times[u])
-                        bju = max(bu + self.service_time[u] + self.dist_m[u, j], self.ready_times[j])
+                        bu = max(route_start_time_list[ri] + self.graph.serviceTime[i] + self.graph.timeMatrix[i, u], self.graph.readyTime[u])
+                        bju = max(bu + self.graph.serviceTime[u] + self.graph.timeMatrix[u, j], self.graph.readyTime[j])
                         c12 = bju - bj
 
                         # remove if over time window
-                        # if bu > due_times[u] or bju > due_times[j]:
-                        #     continue
-                        # PF = c12
-                        # pf_rj = rj
-                        # overtime_flag = 0
-                        # while PF > 0 and pf_rj < len(route)-1:
-                        #     pf_rj += 1
-                        #     bju = max(bju + service_time[route[pf_rj-1]] + dist_m[route[pf_rj-1], route[pf_rj]], \
-                        #         ready_times[route[pf_rj]]) # start time of pf_rj
-                        #     if bju > due_times[route[pf_rj]]:
-                        #         overtime_flag = 1
-                        #         break
-                        #     PF = bju - route_start_time_list[pf_rj] # time delay
-                        # if overtime_flag == 1:
-                        #     continue
+                        if bu > self.graph.dueTime[u] or bju > self.graph.dueTime[j]:
+                            continue
+                        PF = c12
+                        pf_rj = rj
+                        overtime_flag = 0
+                        while PF > 0 and pf_rj < len(route)-1:
+                            pf_rj += 1
+                            bju = max(bju + self.graph.serviceTime[route[pf_rj-1]] + self.graph.disMatrix[route[pf_rj-1], route[pf_rj]], \
+                                self.graph.readyTime[route[pf_rj]]) # start time of pf_rj
+                            if bju > self.graph.dueTime[route[pf_rj]]:
+                                overtime_flag = 1
+                                break
+                            PF = bju - route_start_time_list[pf_rj] # time delay
+                        if overtime_flag == 1:
+                            continue
 
                         # c1 = alpha1*c11(i,u,j) + alpha2*c12(i,u,j)
                         c1 = self.alpha1*c11 + self.alpha2*c12
@@ -165,7 +147,7 @@ class Solomon_Insertion():
                     if best_c1 == np.inf:
                         point_list.pop(pi)
                         continue
-                    c2 = self.lamda * self.dist_m[0, u] - best_c1
+                    c2 = self.lamda * self.graph.disMatrix[0, u] - best_c1
                     c2_list.append(c2)
                     best_insert_list.append(best_insert)
                     pi += 1
@@ -179,45 +161,51 @@ class Solomon_Insertion():
                 route.insert(best_u_insert, best_u)
                 point_list.remove(best_u)
                 unassigned_points.remove(best_u) # when point is assigned, remove from unassigned_points
-                load += self.demands[best_u]
+                load += self.graph.demand[best_u]
                 # update start_time
-                start_time = max(route_start_time_list[best_u_insert-1] + self.service_time[route[best_u_insert-1]] + self.dist_m[i, u], self.ready_times[best_u])
+                start_time = max(route_start_time_list[best_u_insert-1] + self.graph.serviceTime[route[best_u_insert-1]] + self.graph.timeMatrix[route[best_u_insert-1], best_u], self.graph.readyTime[best_u])
                 route_start_time_list.insert(best_u_insert, start_time)
                 for ri in range(best_u_insert+1, len(route)):
-                    start_time = max(route_start_time_list[best_u_insert-1] + self.service_time[route[best_u_insert-1]] + self.dist_m[i, u], self.ready_times[best_u])
+                    start_time = max(route_start_time_list[ri-1] + self.graph.serviceTime[route[ri-1]] + self.graph.timeMatrix[route[ri-1], route[ri]], self.graph.readyTime[route[ri]])
                     route_start_time_list[ri] = start_time
             route.append(0)
             routes.append(route) 
+
         return routes
-                    
-def nearest_neighbour(problem):
+
+    def run(self):
+        min_obj = np.inf
+        best_routes = None
+        # try each strategy, select the best result
+        for init_strategy in range(5):
+            self.init_strategy = init_strategy
+            routes = self.main_process()
+            obj = self.graph.evaluate(routes)
+            if obj < min_obj:
+                min_obj = obj
+                best_routes = routes
+        return best_routes
+                   
+def nearest_neighbour(graph):
     """nearest neighbour algorithm to get an initial solution for VRP
 
     Args:
-        problem (Problem): all information needed in VRPTW
-            positions (ndarray[N, 2]): positions of all points, depot as index 0
-            demands (ndarray[N]): demands of all points, depot as 0
-            capacity (int): capacity of each car
+        graph (Problem): all information needed in VRPTW
+            graph.location (ndarray[N, 2]): graph.location of all points, depot as index 0
+            graph.demand (ndarray[N]): graph.demand of all points, depot as 0
+            graph.capacity (int): graph.capacity of each car
 
     Returns:
         routes (List): routes consist of idx of points
     """
 
     """ read data and preprocess """
-    vehicle_num = problem.vehicle_num
-    capacity = problem.vehicle_capacity
-    customers = problem.customers # depot index 0, including x, y, demand, ready_time, due_time, service_time
-    positions = customers[:, :2]
-    demands = customers[:, 2]
-    ready_times = customers[:, 3]
-    due_times = customers[:, 4]
-    service_time = customers[:, 5]
-    p_num = len(positions)
+    p_num = len(graph.location)
     unassigned_points = list(range(1, p_num)) 
     dist_m = np.zeros((p_num, p_num))
     for i in range(p_num):
         for j in range(p_num):
-            dist_m[i, j] = np.linalg.norm(positions[i]- positions[j])
+            dist_m[i, j] = np.linalg.norm(graph.location[i]- graph.location[j])
     
     routes = []
     """ construct a route each circulation """
@@ -232,7 +220,7 @@ def nearest_neighbour(problem):
             pi = 0
             while pi < len(points_list):
                 p = points_list[pi]
-                if load + demands[p] > capacity:
+                if load + graph.demand[p] > graph.capacity:
                     points_list.remove(p)
                     continue
                 dist = dist_m[cur_p, p]
@@ -245,40 +233,32 @@ def nearest_neighbour(problem):
             route.append(best_p)
             points_list.remove(best_p)
             unassigned_points.remove(best_p)
-            load += demands[best_p]
+            load += graph.demand[best_p]
             cur_p = best_p
         route.append(0)
         routes.append(route)
     return routes
 
-def nearest_addition(problem):
+def nearest_addition(graph):
     """nearest addition algorithm to get an initial solution for VRP
 
     Args:
-        problem (Problem): all information needed in VRPTW
-            positions (ndarray[N, 2]): positions of all points, depot as index 0
-            demands (ndarray[N]): demands of all points, depot as 0
-            capacity (int): capacity of each car
+        graph (Problem): all information needed in VRPTW
+            graph.location (ndarray[N, 2]): graph.location of all points, depot as index 0
+            graph.demand (ndarray[N]): graph.demand of all points, depot as 0
+            graph.capacity (int): graph.capacity of each car
 
     Returns:
         routes (List): routes consist of idx of points
     """
 
     """ read data and preprocess """
-    vehicle_num = problem.vehicle_num
-    capacity = problem.vehicle_capacity
-    customers = problem.customers # depot index 0, including x, y, demand, ready_time, due_time, service_time
-    positions = customers[:, :2]
-    demands = customers[:, 2]
-    ready_times = customers[:, 3]
-    due_times = customers[:, 4]
-    service_time = customers[:, 5]
-    p_num = len(positions)
+    p_num = len(graph.location)
     unassigned_points = list(range(1, p_num)) 
     dist_m = np.zeros((p_num, p_num))
     for i in range(p_num):
         for j in range(p_num):
-            dist_m[i, j] = np.linalg.norm(positions[i]- positions[j])
+            dist_m[i, j] = np.linalg.norm(graph.location[i]- graph.location[j])
     
     routes = []
     """ construct a route each circulation """
@@ -293,7 +273,7 @@ def nearest_addition(problem):
             pi = 0
             while pi < len(points_list):
                 p = points_list[pi]
-                if load + demands[p] > capacity:
+                if load + graph.demand[p] > graph.capacity:
                     points_list.remove(p)
                     continue
                 # calculate addition
@@ -318,41 +298,32 @@ def nearest_addition(problem):
             route.insert(best_p_insert, best_p)
             points_list.remove(best_p)
             unassigned_points.remove(best_p)
-            load += demands[best_p]
+            load += graph.demand[best_p]
             cur_p = best_p
         route.append(0)
         routes.append(route)
     return routes
 
-def farthest_addition(problem):
+def farthest_addition(graph):
     """farthest addition algorithm to get an initial solution for VRP
 
     Args:
-        problem (Problem): all information needed in VRPTW
-            positions (ndarray[N, 2]): positions of all points, depot as index 0
-            demands (ndarray[N]): demands of all points, depot as 0
-            capacity (int): capacity of each car
+        graph (Problem): all information needed in VRPTW
+            graph.location (ndarray[N, 2]): graph.location of all points, depot as index 0
+            graph.demand (ndarray[N]): graph.demand of all points, depot as 0
+            graph.capacity (int): graph.capacity of each car
 
     Returns:
         routes (List): routes consist of idx of points
     """
 
     """ read data and preprocess """
-    vehicle_num = problem.vehicle_num
-    capacity = problem.vehicle_capacity
-    # capacity = 1e7
-    customers = problem.customers # depot index 0, including x, y, demand, ready_time, due_time, service_time
-    positions = customers[:, :2]
-    demands = customers[:, 2]
-    ready_times = customers[:, 3]
-    due_times = customers[:, 4]
-    service_time = customers[:, 5]
-    p_num = len(positions)
+    p_num = len(graph.location)
     unassigned_points = list(range(1, p_num)) 
     dist_m = np.zeros((p_num, p_num))
     for i in range(p_num):
         for j in range(p_num):
-            dist_m[i, j] = np.linalg.norm(positions[i]- positions[j])
+            dist_m[i, j] = np.linalg.norm(graph.location[i]- graph.location[j])
     
     routes = []
     """ construct a route each circulation """
@@ -369,7 +340,7 @@ def farthest_addition(problem):
                 print("")
             while pi < len(points_list):
                 p = points_list[pi]
-                if load + demands[p] > capacity:
+                if load + graph.demand[p] > graph.capacity:
                     points_list.remove(p)
                     continue
                 # calculate addition
@@ -394,40 +365,32 @@ def farthest_addition(problem):
             route.insert(best_p_insert, best_p)
             points_list.remove(best_p)
             unassigned_points.remove(best_p)
-            load += demands[best_p]
+            load += graph.demand[best_p]
             cur_p = best_p
         route.append(0)
         routes.append(route)
     return routes
 
-def CW_saving(problem):
+def CW_saving(graph):
     """Clarke-Wright Saving Algorithm to get an initial solution for VRP
 
     Args:
-        problem (Problem): all information needed in VRPTW
-            positions (ndarray[N, 2]): positions of all points, depot as index 0
-            demands (ndarray[N]): demands of all points, depot as 0
-            capacity (int): capacity of each car
+        graph (Problem): all information needed in VRPTW
+            graph.location (ndarray[N, 2]): graph.location of all points, depot as index 0
+            graph.demand (ndarray[N]): graph.demand of all points, depot as 0
+            graph.capacity (int): graph.capacity of each car
 
     Returns:
         routes (List): routes consist of idx of points
     """
 
     """ read data and preprocess """
-    vehicle_num = problem.vehicle_num
-    capacity = problem.vehicle_capacity
-    customers = problem.customers # depot index 0, including x, y, demand, ready_time, due_time, service_time
-    positions = customers[:, :2]
-    demands = customers[:, 2]
-    ready_times = customers[:, 3]
-    due_times = customers[:, 4]
-    service_time = customers[:, 5]
-    p_num = len(positions)
+    p_num = len(graph.location)
     unassigned_points = list(range(1, p_num)) 
     dist_m = np.zeros((p_num, p_num))
     for i in range(p_num):
         for j in range(p_num):
-            dist_m[i, j] = np.linalg.norm(positions[i]- positions[j])
+            dist_m[i, j] = np.linalg.norm(graph.location[i]- graph.location[j])
     
     """ initial allocation of one vehicle to each customer """
     X = np.zeros((p_num, p_num)) # the connection matrix, X[i, j]=1 shows i to j
@@ -453,8 +416,8 @@ def CW_saving(problem):
         if i in out_map or j in in_map:
             continue
         # exclude if overload
-        load_l = demands[i]
-        load_r = demands[j]
+        load_l = graph.demand[i]
+        load_r = graph.demand[j]
         i_ = i
         j_ = j
         while 1: # find the previous point until 0
@@ -463,7 +426,7 @@ def CW_saving(problem):
                     break
             if i_pre == 0:
                 break
-            load_l += demands[i_pre]
+            load_l += graph.demand[i_pre]
             i_ = i_pre
         while 1: # find the next point until 0
             for j_next in range(p_num): 
@@ -471,10 +434,10 @@ def CW_saving(problem):
                     break
             if j_next == 0:
                 break
-            load_r += demands[j_next]
+            load_r += graph.demand[j_next]
             j_ = j_next
         total_load = load_l + load_r
-        if total_load > capacity: # exclude
+        if total_load > graph.capacity: # exclude
             continue
         # link i and j
         X[i, 0] = 0
@@ -500,40 +463,32 @@ def CW_saving(problem):
     
     return routes
                 
-def sweep_algorithm(problem):
+def sweep_algorithm(graph):
     """ sweep algorithm to get an initial solution for VRP
 
     Args:
-        problem (Problem): all information needed in VRPTW
-            positions (ndarray[N, 2]): positions of all points, depot as index 0
-            demands (ndarray[N]): demands of all points, depot as 0
-            capacity (int): capacity of each car
+        graph (Problem): all information needed in VRPTW
+            graph.location (ndarray[N, 2]): graph.location of all points, depot as index 0
+            graph.demand (ndarray[N]): graph.demand of all points, depot as 0
+            graph.capacity (int): graph.capacity of each car
 
     Returns:
         routes (List): routes consist of idx of points
     """
 
     """ read data and preprocess """
-    vehicle_num = problem.vehicle_num
-    capacity = problem.vehicle_capacity
-    customers = problem.customers # depot index 0, including x, y, demand, ready_time, due_time, service_time
-    positions = customers[:, :2]
-    demands = customers[:, 2]
-    ready_times = customers[:, 3]
-    due_times = customers[:, 4]
-    service_time = customers[:, 5]
-    p_num = len(positions)
+    p_num = len(graph.location)
     unassigned_points = list(range(1, p_num)) 
     dist_m = np.zeros((p_num, p_num))
     for i in range(p_num):
         for j in range(p_num):
-            dist_m[i, j] = np.linalg.norm(positions[i]- positions[j])
+            dist_m[i, j] = np.linalg.norm(graph.location[i]- graph.location[j])
     
     """ sort unassigned points by angle """
     points_angles = np.zeros(p_num)
     for i in range(1, p_num):
-        y_axis = positions[i, 1] - positions[0, 1]
-        x_axis = positions[i, 0] - positions[0, 0]
+        y_axis = graph.location[i, 1] - graph.location[0, 1]
+        x_axis = graph.location[i, 0] - graph.location[0, 0]
         r = np.sqrt(x_axis**2 + y_axis**2)
         cospi = x_axis / r
         angle = math.acos(cospi)
@@ -548,25 +503,25 @@ def sweep_algorithm(problem):
     routes_load = [0]
     while len(unassigned_points) > 0:
         p = unassigned_points.pop()
-        if routes_load[-1] + demands[p] < capacity:
+        if routes_load[-1] + graph.demand[p] < graph.capacity:
             routes[-1].append(p)
-            routes_load[-1] += demands[p]
+            routes_load[-1] += graph.demand[p]
         else:
             routes[-1].append(0)
             routes.append([0, p])
-            routes_load.append(demands[p])
+            routes_load.append(graph.demand[p])
     routes[-1].append(0)
     
     return routes
 
-def cluster_routing(problem):
+def cluster_routing(graph):
     """ two-phase (cluster first, routing second) algorithm to get an initial solution for VRP
 
     Args:
-        problem (Problem): all information needed in VRPTW
-            positions (ndarray[N, 2]): positions of all points, depot as index 0
-            demands (ndarray[N]): demands of all points, depot as 0
-            capacity (int): capacity of each car
+        graph (Problem): all information needed in VRPTW
+            graph.location (ndarray[N, 2]): graph.location of all points, depot as index 0
+            graph.demand (ndarray[N]): graph.demand of all points, depot as 0
+            graph.capacity (int): graph.capacity of each car
 
     Returns:
         routes (List): routes consist of idx of points
@@ -577,23 +532,15 @@ def cluster_routing(problem):
     diff_eps = 1e-2
 
     """ read data and preprocess """
-    vehicle_num = problem.vehicle_num
-    capacity = problem.vehicle_capacity
-    customers = problem.customers # depot index 0, including x, y, demand, ready_time, due_time, service_time
-    positions = customers[:, :2]
-    demands = customers[:, 2]
-    ready_times = customers[:, 3]
-    due_times = customers[:, 4]
-    service_time = customers[:, 5]
-    p_num = len(positions)
+    p_num = len(graph.location)
     unassigned_points = list(range(1, p_num)) 
     dist_m = np.zeros((p_num, p_num))
     for i in range(p_num):
         for j in range(p_num):
-            dist_m[i, j] = np.linalg.norm(positions[i]- positions[j])
+            dist_m[i, j] = np.linalg.norm(graph.location[i]- graph.location[j])
 
     """ cluster first """
-    cluster_centers = positions[1:1+cluster_num].copy() # initiate cluster_centers with first points
+    cluster_centers = graph.location[1:1+cluster_num].copy() # initiate cluster_centers with first points
     while 1:
         # find best cluster for each point
         clusters = [[] for _ in range(cluster_num)] # contains point_idxs of each cluster
@@ -604,8 +551,8 @@ def cluster_routing(problem):
             for k in range(cluster_num):
                 jk = cluster_centers[k]
                 d0i = dist_m[0, i]
-                dijk = np.linalg.norm(positions[i] - cluster_centers[k])
-                djk0 = np.linalg.norm(cluster_centers[k] - positions[0])
+                dijk = np.linalg.norm(graph.location[i] - cluster_centers[k])
+                djk0 = np.linalg.norm(cluster_centers[k] - graph.location[0])
                 cki = (d0i + dijk +djk0) - 2*djk0 # ? is the second part of formula needed?
                 if cki < min_c:
                     min_c = cki
@@ -615,7 +562,7 @@ def cluster_routing(problem):
         diff = 0
         for k in range(cluster_num):
             assert len(clusters[k]) > 0, "cluster empty, maybe cluster number too high"
-            center = np.mean(positions[clusters[k]], 0) 
+            center = np.mean(graph.location[clusters[k]], 0) 
             diff += sum(abs(cluster_centers[k] - center))
             cluster_centers[k] = center
         if diff < diff_eps:
@@ -624,20 +571,21 @@ def cluster_routing(problem):
     """ show cluster result (optional) """
     show = True
     if show:
-        plt.scatter(positions[:1, 0], positions[:1, 1], s=200, marker='*')
+        plt.scatter(graph.location[:1, 0], graph.location[:1, 1], s=200, marker='*')
         plt.scatter(cluster_centers[:, 0], cluster_centers[:, 1], c = 'r', s = 100, marker='+')
         for cluster in clusters:
-            plt.scatter(positions[cluster, 0], positions[cluster, 1])
+            plt.scatter(graph.location[cluster, 0], graph.location[cluster, 1])
     plt.show()
 
     """ routing second """
     routes = []
     for cluster in clusters:
         cluster.insert(0, 0) # add depot
-        sub_problem = copy.deepcopy(problem)
+        sub_problem = copy.deepcopy(graph)
         sub_problem.customers = sub_problem.customers[cluster]
         # apply other algorithm to do subrouting
-        sub_routes = solomon_insertion(sub_problem)
+        alg = Solomon_Insertion(graph)
+        sub_routes = alg.run()
         # translate sub_points to points
         for route in sub_routes:
             for ri in range(len(route)):
@@ -652,7 +600,7 @@ class Relocate():
         self.k = k # how many points relocate together, k=1:relocate, k>1:Or-Opt
 
     def run(self, solution):
-        """relocate point and the point next to it randomly inter/inner route (capacity not considered)
+        """relocate point and the point next to it randomly inter/inner route (graph.capacity not considered)
 
         Args:
             solution (List[int]): idxs of points of each route (route seperate with idx 0)
@@ -691,7 +639,7 @@ class Exchange():
         self.k = k # how many points exchange together
 
     def run(self, solution):
-        """exchange two points randomly inter/inner route (capacity not considered)
+        """exchange two points randomly inter/inner route (graph.capacity not considered)
         ps: Exchange operator won't change the points number of each vehicle
 
         Args:
@@ -732,7 +680,7 @@ class Reverse():
         pass
 
     def run(self, solution):
-        """reverse route between two points randomly inter/inner route (capacity not considered)
+        """reverse route between two points randomly inter/inner route (graph.capacity not considered)
 
         Args:
             solution (List[int]): idxs of points of each route (route seperate with idx 0)
@@ -759,25 +707,15 @@ class Reverse():
         return neighbour
 
 # tools
-def evaluate(problem, routes):
+def evaluate(graph, routes):
     """evaluate the objective value and feasibility of route
 
     Args:
-        problem (Problem): informations of VRPTW
-        routes (List): solution of problem, to evaluate
+        graph (Problem): informations of VRPTW
+        routes (List): solution of graph, to evaluate
     Return:
         obj (double): objective value of the route (total distance)
     """
-    # read data
-    vehicle_num = problem.vehicle_num
-    capacity = problem.vehicle_capacity
-    customers = problem.customers # depot index 0, including x, y, demand, ready_time, due_time, service_time
-    positions = customers[:, :2]
-    demands = customers[:, 2]
-    ready_times = customers[:, 3]
-    due_times = customers[:, 4]
-    service_time = customers[:, 5]
-
     obj = 0
     # calculate total routes length
     total_dist = 0
@@ -786,17 +724,17 @@ def evaluate(problem, routes):
         for ri in range(1, len(route)):
             p1 = route[ri-1]
             p2 = route[ri]
-            dist = np.linalg.norm(positions[p1] - positions[p2])
+            dist = np.linalg.norm(graph.location[p1] - graph.location[p2])
             route_dist += dist
         total_dist += route_dist
 
-    # check capacity constraint
+    # check graph.capacity constraint
     overload_cnt = 0
     for route in routes:
         route_load = 0
         for ri in range(len(route)):
-            route_load += demands[route[ri]]
-        if route_load > capacity:
+            route_load += graph.demand[route[ri]]
+        if route_load > graph.capacity:
             overload_cnt += 1
             # obj += np.inf
     print('overload: {}routes'.format(overload_cnt))
@@ -811,44 +749,44 @@ def evaluate(problem, routes):
                 p2 = route[0]
             else:
                 p2 = route[ri+1]
-            cur_time += np.linalg.norm(positions[p1] - positions[p2])
-            if cur_time < ready_times[p2]:
-                cur_time = ready_times[p2]
-            if cur_time > due_times[p2]: # compare start_time with due_time
+            cur_time += np.linalg.norm(graph.location[p1] - graph.location[p2])
+            if cur_time < graph.readyTime[p2]:
+                cur_time = graph.readyTime[p2]
+            if cur_time > graph.dueTime[p2]: # compare start_time with due_time
                 overtime_cnt += 1
                 # obj += np.inf
                 break
-            cur_time += service_time[p2]
+            cur_time += graph.serviceTime[p2]
     print('overtime: {}routes'.format(overtime_cnt))
 
     obj += total_dist
     return obj
 
-def show_routes(positions, routes):
+def show_routes(graph, routes):
     for ri, route in enumerate(routes):
         print("route {}: {}".format(ri, route))
     plt.figure()
-    plt.scatter(positions[1:, 0], positions[1:, 1])
-    plt.scatter(positions[0:1, 0], positions[0:1, 1], s = 150, c = 'r', marker='*')
+    plt.scatter(graph.location[1:, 0], graph.location[1:, 1])
+    plt.scatter(graph.location[0:1, 0], graph.location[0:1, 1], s = 150, c = 'r', marker='*')
     for route in routes:
-        plt.plot(positions[route, 0], positions[route, 1], c='r')
+        plt.plot(graph.location[route, 0], graph.location[route, 1], c='r')
     plt.show()
 
 if __name__ == "__main__":
     file_name = "solomon_100\C101.txt"
-    problem = read_data(file_name)
+    graph = GraphTool.Graph(file_name)
     time1 = time()
-    # routes = nearest_neighbour(problem)
-    # routes = nearest_addition(problem)
-    # routes = farthest_addition(problem)
-    # routes = CW_saving(problem)
-    # routes = sweep_algorithm(problem)
-    # routes = cluster_routing(problem)
-    alg = Solomon_Insertion(problem)
+    # routes = nearest_neighbour(graph)
+    # routes = nearest_addition(graph)
+    # routes = farthest_addition(graph)
+    # routes = CW_saving(graph)
+    # routes = sweep_algorithm(graph)
+    # routes = cluster_routing(graph)
+    alg = Solomon_Insertion(graph)
     routes = alg.run()
     time2 = time()
-    obj = evaluate(problem, routes)
-    show_routes(problem.customers[:, :2], routes)
+    obj = evaluate(graph, routes)
+    show_routes(graph, routes)
     print("vehicel_num: {}, obj: {}, time consumption: {}".format(len(routes), obj, time2-time1))
 
 
